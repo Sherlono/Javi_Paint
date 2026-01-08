@@ -1,0 +1,8 @@
+# Butano made files
+*.elf
+*.gba
+*.sav
+
+# Folders
+\build
+\.vscode
