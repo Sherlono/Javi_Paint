@@ -1,5 +1,6 @@
 #include "bn_core.h"
 #include "bn_log.h"
+#include "bn_math.h"
 #include "bn_deque.h"
 #include "bn_keypad.h"
 #include "bn_string.h"
@@ -13,6 +14,7 @@
 
 #include "bn_type_traits.h"
 
+#include "bn_sprite_items_poi.h"
 #include "bn_sprite_items_cursor.h"
 
 namespace jv
@@ -72,6 +74,7 @@ namespace jv
             points.push_back(SmallPoint(tipPos));
 
             while (points.size() > 0){
+                if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
                 const SmallPoint p = points.front();
                 points.pop_front();
 
@@ -120,11 +123,17 @@ namespace jv
                     _painter.plot(Tip_Position(), _color);
                     break;
                 }
+                case Mode::Eraser: {
+                    _brushTarget = _sprite.position();
+                    for(int i = 0; i < 5; i++) _painter.line(Tip_Position() + bn::point(-3, i - 3), Tip_Position() + bn::point(2, i - 3), _color);
+                    break;
+                }
                 case Mode::Line: {
                     _startPoint = Tip_Position();
                     _painter.plot(_startPoint, _color);
 
                     while (bn::keypad::a_held()){
+                        if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
                         Move();
                         bn::core::update();
                     }
@@ -132,9 +141,21 @@ namespace jv
                 }
                 case Mode::Square: {
                     _startPoint = Tip_Position();
-                    _painter.plot(_startPoint, _color);
+                    _tempSprite = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(bn::display::width(), bn::display::height())/2);
 
                     while (bn::keypad::a_held()){
+                        if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
+                        Move();
+                        bn::core::update();
+                    }
+                    break;
+                }
+                case Mode::Circle: {
+                    _startPoint = Tip_Position();
+                    _tempSprite = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(bn::display::width(), bn::display::height())/2);
+
+                    while (bn::keypad::a_held()){
+                        if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
                         Move();
                         bn::core::update();
                     }
@@ -162,6 +183,11 @@ namespace jv
                     _painter.plot((_brushTarget.x() + X_OFFSET).integer(), (_brushTarget.y() + Y_OFFSET).integer(), _color);
                     break;
                 }
+                case Mode::Eraser: {
+                    _brushTarget = Lerp(_brushTarget, _sprite.position(), L_TIME);
+                    for(int i = 0; i < 5; i++) _painter.line(Tip_Position() + bn::point(-3, i - 3), Tip_Position() + bn::point(2, i - 3), _color);
+                    break;
+                }
                 default:
                     break;
             }
@@ -174,15 +200,46 @@ namespace jv
                     break;
                 }
                 case Mode::Square: {
+                    _tempSprite.reset();
                     const bn::point endPoint = Tip_Position();
 
-                    const int x_start = bn::min(_startPoint.x(),endPoint.x()), x_end = bn::max(_startPoint.x(),endPoint.x());
-                    const int y_start = bn::min(_startPoint.y(),endPoint.y()), y_end = bn::max(_startPoint.y(),endPoint.y());
+                    const int x_start = bn::min(_startPoint.x(), endPoint.x()), x_end = bn::max(_startPoint.x(), endPoint.x());
+                    const int y_start = bn::min(_startPoint.y(), endPoint.y()), y_end = bn::max(_startPoint.y(), endPoint.y());
 
                     for (int i = 0; i < y_end - y_start + 1; i++){
                         bn::point lineStart(x_start, y_start + i);
                         bn::point lineEnd(x_end, y_start + i);
                         _painter.line(lineStart, lineEnd, _color);
+                    }
+                    break;
+                }
+                case Mode::Circle: {
+                    _tempSprite.reset();
+                    const bn::point endPoint = Tip_Position();
+                    
+                    const int aux_x = _startPoint.x() - endPoint.x(), aux_y = _startPoint.y() - endPoint.y();
+                    const int r = bn::sqrt(aux_x*aux_x + aux_y*aux_y);
+                    bn::fixed d = 1.25 - r;
+                    int x = 0, y = r;
+
+                    while (x <= y)
+                    {
+                        if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
+                        _painter.plot(_startPoint.x() + x, _startPoint.y() + y, _color);
+                        _painter.plot(_startPoint.x() - x, _startPoint.y() + y, _color);
+                        _painter.plot(_startPoint.x() + x, _startPoint.y() - y, _color);
+                        _painter.plot(_startPoint.x() - x, _startPoint.y() - y, _color);
+                        _painter.plot(_startPoint.x() + y, _startPoint.y() + x, _color);
+                        _painter.plot(_startPoint.x() - y, _startPoint.y() + x, _color);
+                        _painter.plot(_startPoint.x() + y, _startPoint.y() - x, _color);
+                        _painter.plot(_startPoint.x() - y, _startPoint.y() - x, _color);
+                        x++;
+                        if (d < 0) d += 2 * x + 3;
+                        else
+                        {
+                            y--;
+                            d += 2 * (x - y) + 5;
+                        }
                     }
                     break;
                 }
@@ -195,6 +252,11 @@ namespace jv
             _mode = (_mode + 1) % Mode::End;
             _sprite.set_tiles(bn::sprite_items::cursor.tiles_item().create_tiles(_mode));
         }
+        void Previous_Mode(){
+            _mode = _mode == 0 ? Mode::End - 1 : (_mode - 1) % Mode::End;
+            _sprite.set_tiles(bn::sprite_items::cursor.tiles_item().create_tiles(_mode));
+        }
+
 
         void Color_Mode(){
             int colorIndex = 0;
@@ -205,6 +267,7 @@ namespace jv
             bn::vector<bn::sprite_ptr, 3> txt_sprts;
             
             while(!bn::keypad::a_released()){
+                if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
                 txt_sprts.clear();
                 bn::string<3> text = "";
                 if (bn::keypad::left_pressed() && colorIndex > 0) colorIndex--;
@@ -218,13 +281,15 @@ namespace jv
                     if (bn::keypad::down_pressed()) rgb[colorIndex] -= 1;
                     else if (bn::keypad::down_held()) rgb[colorIndex] -= bn::fixed(0.1);
                 }
+                if(bn::keypad::l_pressed()) rgb[colorIndex] - 10 >= 0 ? rgb[colorIndex] -= 10 : rgb[colorIndex] = 0;
+                if(bn::keypad::r_pressed()) rgb[colorIndex] + 10 <= 31 ? rgb[colorIndex] += 10 : rgb[colorIndex] = 31;
 
                 text = text + rgbChar[colorIndex] + bn::to_string<3>(rgb[colorIndex].integer());
                 text_generator.generate(_sprite.x() + 8, _sprite.y(), text, txt_sprts);
 
-                _color.set_components(rgb[0].integer(), rgb[1].integer(), rgb[2].integer());
                 bn::core::update();
             }
+            _color.set_components(rgb[0].integer(), rgb[1].integer(), rgb[2].integer());
             txt_sprts.clear();
             bn::core::update();
         }
@@ -235,24 +300,26 @@ namespace jv
             if (bn::keypad::a_held()) Held();
             if (bn::keypad::a_released()) Released();
             
-            if (bn::keypad::l_pressed()) Next_Mode();
-            if (bn::keypad::r_pressed()) Color_Mode();
+            if (bn::keypad::l_pressed()) Previous_Mode();
+            if (bn::keypad::r_pressed()) Next_Mode();
+            if (bn::keypad::b_pressed()) Color_Mode();
             if (bn::keypad::start_pressed()) _painter.fill(_color);
         }
 
     private:
-        enum Mode {Brush, Line, Square, Bucket, Picker, End};
+        enum Mode {Brush, Eraser, Line, Square, Circle, Bucket, Picker, End};
 
-        const int X_OFFSET = bn::display::width()/2, Y_OFFSET = bn::display::height()/2;
+        const int X_OFFSET = (bn::display::width()/2) - 2, Y_OFFSET = (bn::display::height()/2);
         const bn::fixed L_TIME = 0.05f;
 
         bn::sprite_ptr _sprite;
+        bn::optional<bn::sprite_ptr> _tempSprite;
         bn::sp_direct_bitmap_bg_painter _painter;
         bn::span<bn::color> _pixels;
         bn::color _color = bn::color(0, 0, 0);
         bn::fixed_point _brushTarget;
         bn::point _startPoint;
-        int _mode = Mode::Brush;
+        int8_t _mode = Mode::Brush;
     };
     
 }
@@ -269,6 +336,7 @@ int main()
     while(true)
     {
         cursor.update();
+        if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
         bn::core::update();
     }
 }
