@@ -31,9 +31,9 @@ namespace jv
         FFData(numType1 _x1, numType2 _x2, numType3 _y, bool _dy): x1(_x1), x2(_x2), y(_y), dy(_dy){}
         [[nodiscard]] int Dy(){
              if(dy) return 1;
-             else return 0;
+             else return -1;
         }
-        unsigned char x1 = 0, x2 = 0, y = 0;
+        uint8_t x1 = 0, x2 = 0, y = 0;
         bool dy = false;
     };
 
@@ -88,8 +88,8 @@ namespace jv
             points.push_back(FFData(tipPos.x(), tipPos.x(), tipPos.y() - 1, false));
 
             while (points.size() > 0){
-                FFData p = points.front();
-                points.pop_front();
+                FFData p = points.back();
+                points.pop_back();
                 int x = p.x1;
                 if (Inside(x, p.y) && Pixel(x, p.y) == oldColor){
                     while(Inside(x - 1, p.y) && Pixel(x - 1, p.y) == oldColor){
