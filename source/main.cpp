@@ -13,8 +13,6 @@
 #include "bn_sp_direct_bitmap_bg_painter.h"
 #include "common_variable_8x8_sprite_font.h"
 
-#include "bn_type_traits.h"
-
 #include "bn_sprite_items_poi.h"
 #include "bn_sprite_items_cursor.h"
 #include "bn_sprite_items_color_display.h"
@@ -25,30 +23,18 @@ namespace jv
         return a + (b-a) * t;
     }
 
-    struct SmallPoint{
-        ~SmallPoint() = default;
-        SmallPoint(){}
-        template <typename numTypeA, typename numTypeB>
-        SmallPoint(numTypeA _x, numTypeB _y): x(_x), y(_y) {}
-        SmallPoint(bn::point point): x(point.x()), y(point.y()) {}
-        
-        SmallPoint& operator=(bn::point other){
-            x = other.x();
-            y = other.y();
-            return *this;
-        }
-        SmallPoint& operator=(const bn::point& other){
-            x = other.x();
-            y = other.y();
-            return *this;
-        }
-        SmallPoint& operator=(bn::point&& other){
-            x = other.x();
-            y = other.y();
-            return *this;
-        }
+    const uint8_t WIDTH = bn::display::width(), HEIGHT = bn::display::height();
 
-        unsigned char x = 0, y = 0;
+    struct FFData{
+        ~FFData() = default;
+        template <typename numType1, typename numType2, typename numType3>
+        FFData(numType1 _x1, numType2 _x2, numType3 _y, bool _dy): x1(_x1), x2(_x2), y(_y), dy(_dy){}
+        [[nodiscard]] int Dy(){
+             if(dy) return 1;
+             else return -1;
+        }
+        uint8_t x1 = 0, x2 = 0, y = 0;
+        bool dy = false;
     };
 
     class Cursor{
@@ -61,62 +47,89 @@ namespace jv
                 _painter.fill(bn::color(16, 16, 16));
             }
 
+        void update(){
+            Move();
+            if (bn::keypad::a_pressed()) Pressed();
+            if (bn::keypad::a_held()) Held();
+            if (bn::keypad::a_released()) Released();
+            
+            if (bn::keypad::b_pressed()) Color_Mode();
+
+            if (bn::keypad::l_pressed()) Set_Mode(_mode == 0 ? Mode::End - 1 : (_mode - 1) % Mode::End);
+            if (bn::keypad::r_pressed()) Set_Mode((_mode + 1) % Mode::End);
+
+            if (bn::keypad::start_pressed()) _painter.fill(_mainColor);
+            if (bn::keypad::select_pressed()) Swap_Color();
+        }
+
+    private:
+        enum Mode {Brush, Eraser, Line, Square, Circle, Bucket, Picker, End};
+
+        const int X_OFFSET = (WIDTH/2) - 2, Y_OFFSET = (HEIGHT/2);
+        const bn::fixed L_TIME = 0.05f;
+
         [[nodiscard]] bn::point Tip_Position() const { return bn::point(_cursor.x().integer() + X_OFFSET, _cursor.y().integer() + Y_OFFSET); }
         
-        void FloodFill() {
-            const bn::point tipPos = Tip_Position();
-            const uint8_t width = bn::display::width(), height = bn::display::height();
-            
-            int pixelIndex = tipPos.x() + tipPos.y() * width;
-            if (_pixels[pixelIndex] == _mainColor) return;
+        [[nodiscard]] bool Inside(int x, int y){
+            return x >= 0 && y >= 0 && x < WIDTH && y < HEIGHT;
+        }
 
-            const bn::color oldColor = _pixels[pixelIndex];
+        [[nodiscard]] bn::color Pixel(int x, int y){
+            return _pixels[x + y * WIDTH];
+        }
 
-            bn::deque<SmallPoint, 1024> points;
-            points.push_back(SmallPoint(tipPos));
+        void FloodFill(bn::point tipPos) {
+            if (Pixel(tipPos.x(), tipPos.y()) == _mainColor) return;
+
+            const bn::color oldColor = Pixel(tipPos.x(), tipPos.y());
+
+            bn::deque<FFData, 128> points;
+            points.push_back(FFData(tipPos.x(), tipPos.x(), tipPos.y(), true));
+            points.push_back(FFData(tipPos.x(), tipPos.x(), tipPos.y() - 1, false));
 
             while (points.size() > 0){
-                if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
-                const SmallPoint p = points.front();
-                points.pop_front();
-
-                const uint8_t x_plus_1 = p.x + 1, y_plus_1 = p.y + 1;
-                if (x_plus_1 > width || y_plus_1 > height) continue;
-
-                const int y_times_w = p.y * width;
-                pixelIndex = p.x + y_times_w;
-
-                if (_pixels[pixelIndex] == oldColor){
-                    _painter.plot(p.x, p.y, _mainColor);
-                    const int x_minus_1 = p.x - 1, y_minus_1 = p.y - 1;
-                    if (x_plus_1 < width && _pixels[x_plus_1 + y_times_w] != _mainColor){
-                        points.push_back(SmallPoint(x_plus_1, p.y));
+                FFData p = points.back();
+                points.pop_back();
+                int x = p.x1;
+                if (Inside(x, p.y) && Pixel(x, p.y) == oldColor){
+                    while(Inside(x - 1, p.y) && Pixel(x - 1, p.y) == oldColor){
+                        _painter.plot(x - 1, p.y, _mainColor);
+                        x = x - 1;
                     }
-                    if (x_minus_1 >= 0 && _pixels[x_minus_1 + y_times_w] != _mainColor){
-                        points.push_back(SmallPoint(x_minus_1, p.y));
+                    if(x < p.x1){
+                        points.push_back(FFData(x, p.x1 - 1, p.y - p.Dy(), !p.dy));
                     }
-                    if (y_plus_1 < height && _pixels[p.x + y_plus_1 * width] != _mainColor){
-                        points.push_back(SmallPoint(p.x, y_plus_1));
+                }
+                while(p.x1 <= p.x2){
+                    while(Inside(p.x1, p.y) && Pixel(p.x1, p.y) == oldColor){
+                        _painter.plot(p.x1, p.y, _mainColor);
+                        p.x1 = p.x1 + 1;
                     }
-                    if (y_minus_1 >= 0 && _pixels[p.x + y_minus_1 * width] != _mainColor){
-                        points.push_back(SmallPoint(p.x, y_minus_1));
+                    if(p.x1 > x){
+                        points.push_back(FFData(x, p.x1 - 1, p.y + p.Dy(), p.dy));
                     }
+                    if(p.x1 - 1 > p.x2){
+                        points.push_back(FFData(p.x2 + 1, p.x1 - 1, p.y - p.Dy(), !p.dy));
+                    }
+                    p.x1 = p.x1 + 1;
+                    while(p.x1 <= p.x2 && Inside(p.x1, p.y) && Pixel(p.x1, p.y) != oldColor){
+                        p.x1 = p.x1 + 1;
+                    }
+                    x = p.x1;
                 }
             }
         }
-
-
 
         void Move(){
             if(bn::keypad::up_held()){              // Up
                 if(_cursor.y() + Y_OFFSET - 1 >= 0) _cursor.set_position(_cursor.x(), _cursor.y() - 1);
             }else if(bn::keypad::down_held()){      // Down
-                if(_cursor.y() + Y_OFFSET + 1 < bn::display::height()) _cursor.set_position(_cursor.x(), _cursor.y() + 1);
+                if(_cursor.y() + Y_OFFSET + 1 < HEIGHT) _cursor.set_position(_cursor.x(), _cursor.y() + 1);
             }
             if(bn::keypad::left_held()){            // Left
                 if(_cursor.x() + X_OFFSET - 1 >= 0) _cursor.set_position(_cursor.x() - 1, _cursor.y());
             }else if(bn::keypad::right_held()){     // Right
-                if(_cursor.x() + X_OFFSET + 1 < bn::display::width()) _cursor.set_position(_cursor.x() + 1, _cursor.y());
+                if(_cursor.x() + X_OFFSET + 1 < WIDTH) _cursor.set_position(_cursor.x() + 1, _cursor.y());
             }
         }
 
@@ -147,7 +160,7 @@ namespace jv
                 }
                 case Mode::Square: {
                     _startPoint = Tip_Position();
-                    _tempSprite = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(bn::display::width(), bn::display::height())/2);
+                    _tempSprite_1 = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(WIDTH, HEIGHT)/2);
 
                     while (bn::keypad::a_held()){
                         if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
@@ -158,7 +171,7 @@ namespace jv
                 }
                 case Mode::Circle: {
                     _startPoint = Tip_Position();
-                    _tempSprite = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(bn::display::width(), bn::display::height())/2);
+                    _tempSprite_1 = bn::sprite_items::poi.create_sprite(_startPoint - bn::point(WIDTH, HEIGHT)/2);
 
                     while (bn::keypad::a_held()){
                         if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
@@ -168,13 +181,13 @@ namespace jv
                     break;
                 }
                 case Mode::Bucket: {
-                    FloodFill();
+                    FloodFill(Tip_Position());
                     bn::core::update();
                     break;
                 }
                 case Mode::Picker: {
                     bn::point tip_position = Tip_Position();
-                    _mainColor = _pixels[tip_position.x() + tip_position.y() * bn::display::width()];
+                    _mainColor = _pixels[tip_position.x() + tip_position.y() * WIDTH];
                     break;
                 }
                 default:
@@ -208,7 +221,7 @@ namespace jv
                     break;
                 }
                 case Mode::Square: {
-                    _tempSprite.reset();
+                    _tempSprite_1.reset();
                     const bn::point endPoint = Tip_Position();
 
                     const int x_start = bn::min(_startPoint.x(), endPoint.x()), x_end = bn::max(_startPoint.x(), endPoint.x());
@@ -222,7 +235,7 @@ namespace jv
                     break;
                 }
                 case Mode::Circle: {
-                    _tempSprite.reset();
+                    _tempSprite_1.reset();
                     const bn::point endPoint = Tip_Position();
                     
                     const int aux_x = _startPoint.x() - endPoint.x(), aux_y = _startPoint.y() - endPoint.y();
@@ -274,14 +287,29 @@ namespace jv
 
             bn::sprite_text_generator text_generator(common::variable_8x8_sprite_font);
             bn::vector<bn::sprite_ptr, 3> txt_sprts;
+            bn::string<3> text = "";
             
-            _tempSprite = bn::sprite_items::color_display.create_sprite(Tip_Position() - bn::point(-18 + bn::display::width()/2, -10 + bn::display::height()/2));
-            bn::sprite_palette_ptr color_palette = _tempSprite.value().palette();
+            _tempSprite_1 = bn::sprite_items::color_display.create_sprite(Tip_Position() - bn::point(WIDTH/2 - 18, HEIGHT/2 - 10));
+            _tempSprite_1.value().set_bg_priority(0);
+            _tempSprite_2 = bn::sprite_items::color_display.create_sprite(Tip_Position() - bn::point(WIDTH/2 - 20, HEIGHT/2 - 12));
+            _tempSprite_2.value().set_palette(bn::sprite_palette_ptr::create_new(bn::sprite_items::color_display.palette_item()));
+            
+            bn::sprite_palette_ptr color_palettes[2] = {_tempSprite_1.value().palette(), _tempSprite_2.value().palette()};
 
             while(!bn::keypad::a_released()){
                 if(bn::keypad::a_held() && bn::keypad::b_held() && bn::keypad::start_held() && bn::keypad::select_held()) bn::core::reset();
+                if (bn::keypad::select_pressed()){
+                    _mainColor.set_components(rgb[0].integer(), rgb[1].integer(), rgb[2].integer());
+                    rgb[0] = _backupColor.red();
+                    rgb[1] = _backupColor.green();
+                    rgb[2] = _backupColor.blue();
+                    Swap_Color();
+                    colorIndex = 0;
+                }
+                
                 txt_sprts.clear();
-                bn::string<3> text = "";
+                text = "";
+
                 if (bn::keypad::left_pressed() && colorIndex > 0) colorIndex--;
                 else if (bn::keypad::right_pressed() && colorIndex < 2) colorIndex++;
 
@@ -296,43 +324,25 @@ namespace jv
                 if(bn::keypad::l_pressed()) rgb[colorIndex] - 10 >= 0 ? rgb[colorIndex] -= 10 : rgb[colorIndex] = 0;
                 if(bn::keypad::r_pressed()) rgb[colorIndex] + 10 <= 31 ? rgb[colorIndex] += 10 : rgb[colorIndex] = 31;
 
-                color_palette.set_fade(bn::color(rgb[0].integer(), rgb[1].integer(), rgb[2].integer()), 1);
+                color_palettes[0].set_fade(bn::color(rgb[0].integer(), rgb[1].integer(), rgb[2].integer()), 1);
+                color_palettes[1].set_fade(_backupColor, 1);
 
                 text = text + rgbChar[colorIndex] + bn::to_string<3>(rgb[colorIndex].integer());
                 text_generator.generate(_cursor.x() + 8, _cursor.y(), text, txt_sprts);
 
                 bn::core::update();
             }
+
             _mainColor.set_components(rgb[0].integer(), rgb[1].integer(), rgb[2].integer());
             txt_sprts.clear();
             
-            _tempSprite.reset();
+            _tempSprite_1.reset();
+            _tempSprite_2.reset();
             bn::core::update();
         }
 
-        void update(){
-            Move();
-            if (bn::keypad::a_pressed()) Pressed();
-            if (bn::keypad::a_held()) Held();
-            if (bn::keypad::a_released()) Released();
-            
-            if (bn::keypad::b_pressed()) Color_Mode();
-
-            if (bn::keypad::l_pressed()) Set_Mode(_mode == 0 ? Mode::End - 1 : (_mode - 1) % Mode::End);
-            if (bn::keypad::r_pressed()) Set_Mode((_mode + 1) % Mode::End);
-
-            if (bn::keypad::start_pressed()) _painter.fill(_mainColor);
-            if (bn::keypad::select_pressed()) Swap_Color();
-        }
-
-    private:
-        enum Mode {Brush, Eraser, Line, Square, Circle, Bucket, Picker, End};
-
-        const int X_OFFSET = (bn::display::width()/2) - 2, Y_OFFSET = (bn::display::height()/2);
-        const bn::fixed L_TIME = 0.05f;
-
         bn::sprite_ptr _cursor;
-        bn::optional<bn::sprite_ptr> _tempSprite;
+        bn::optional<bn::sprite_ptr> _tempSprite_1, _tempSprite_2;
         bn::sp_direct_bitmap_bg_painter _painter;
         bn::span<bn::color> _pixels;
         bn::color _mainColor = bn::color(0, 0, 0), _backupColor = bn::color(16, 16, 16);
